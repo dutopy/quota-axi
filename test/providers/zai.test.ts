@@ -847,6 +847,43 @@ describe("Z.AI Pi credential resolution", () => {
     );
   });
 
+  it("tries every Pi entry before falling back to opencode", async () => {
+    const request = vi
+      .fn()
+      .mockResolvedValueOnce(new Response(null, { status: 401 }))
+      .mockResolvedValueOnce(jsonResponse(QUOTA_PAYLOAD));
+    const report = await testAdapter({
+      piCredentialBroker: piBroker([
+        {
+          status: "available",
+          providerId: "zai",
+          credential: PI_KEY,
+        },
+        {
+          status: "available",
+          providerId: "zai-coding-cn",
+          credential: "synthetic-pi-zai-cn-key-284",
+        },
+      ]),
+      fetch: request,
+    }).fetchQuota(OPTIONS);
+
+    expect(request).toHaveBeenCalledTimes(2);
+    expect(new URL(String(request.mock.calls[1][0])).hostname).toBe(
+      "open.bigmodel.cn",
+    );
+    expect(report.state.status).toBe("fresh");
+    expect(report.attempts).toEqual([
+      {
+        source: "pi:zai",
+        status: "failed",
+        error: "provider_auth_rejected",
+      },
+      { source: "pi:zai-coding-cn", status: "success" },
+      { source: "opencode:auth.json", status: "skipped" },
+    ]);
+  });
+
   it("falls back to the opencode credential when Pi's key is rejected", async () => {
     const request = vi
       .fn()
@@ -1340,9 +1377,14 @@ function testAdapter(
 }
 
 function piBroker(
-  resolution: PiApiKeyCredentialResolution,
+  value: PiApiKeyCredentialResolution | readonly PiApiKeyCredentialResolution[],
   providerIds: readonly string[] = ["zai", "zai-coding-cn"],
 ): PiApiKeyCredentialBroker {
+  const resolutions = Array.isArray(value) ? value : [value];
+  const resolution =
+    resolutions.find((entry) => entry.status === "available") ??
+    resolutions[0] ??
+    ({ status: "missing" } as const);
   const primary = providerIds[0] ?? "zai";
   const inspection: PiApiKeyCredentialInspection =
     resolution.status === "available"
@@ -1369,6 +1411,7 @@ function piBroker(
   return {
     providerIds,
     resolve: vi.fn(async () => resolution),
+    resolveAll: vi.fn(async () => resolutions),
     inspect: vi.fn(async () => inspection),
   };
 }

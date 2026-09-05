@@ -49,6 +49,7 @@ export type PiApiKeyCredentialBroker = {
   /** Ordered Pi auth.json entry ids this broker reads; the first is primary. */
   providerIds: readonly string[];
   resolve(): Promise<PiApiKeyCredentialResolution>;
+  resolveAll?(): Promise<readonly PiApiKeyCredentialResolution[]>;
   inspect(): Promise<PiApiKeyCredentialInspection>;
 };
 
@@ -79,6 +80,7 @@ export function createPiApiKeyCredentialBroker(
   return {
     providerIds,
     resolve: () => resolveCredential(providerIds, dependencies),
+    resolveAll: () => resolveCredentials(providerIds, dependencies),
     inspect: () => inspectCredential(providerIds, dependencies),
   };
 }
@@ -93,38 +95,47 @@ async function resolveCredential(
   providerIds: readonly string[],
   dependencies: BrokerDependencies,
 ): Promise<PiApiKeyCredentialResolution> {
+  const resolutions = await resolveCredentials(providerIds, dependencies);
+  return (
+    resolutions.find((resolution) => resolution.status === "available") ??
+    resolutions[0] ?? { status: "missing" }
+  );
+}
+
+async function resolveCredentials(
+  providerIds: readonly string[],
+  dependencies: BrokerDependencies,
+): Promise<readonly PiApiKeyCredentialResolution[]> {
   const parsed = await readPiAuth(dependencies);
   if (typeof parsed === "string") {
-    // A file-level failure has no responsible entry; the primary id reports it.
-    return parsed === "missing"
-      ? { status: "missing" }
-      : parsed === "invalid"
-        ? { status: "invalid", providerId: providerIds[0] ?? "" }
-        : { status: "error" };
+    return [
+      parsed === "missing"
+        ? { status: "missing" }
+        : parsed === "invalid"
+          ? { status: "invalid", providerId: providerIds[0] ?? "" }
+          : { status: "error" },
+    ];
   }
-  const root = parsed;
-  let firstProblem:
-    | { status: "invalid" | "unsupported"; providerId: string }
-    | undefined;
+  const resolutions: PiApiKeyCredentialResolution[] = [];
   for (const providerId of providerIds) {
-    const entry = objectValue(root[providerId]);
+    const entry = objectValue(parsed[providerId]);
     if (!entry) continue;
     const type =
       typeof entry.type === "string"
         ? entry.type.trim().toLowerCase()
         : undefined;
     if (type === "api_key") {
-      const apiKey = usableLiteralSecret(entry.key);
-      if (apiKey !== undefined) {
-        return { status: "available", providerId, credential: apiKey };
-      }
-      firstProblem ??= { status: "invalid", providerId };
-      continue;
+      const credential = usableLiteralSecret(entry.key);
+      resolutions.push(
+        credential === undefined
+          ? { status: "invalid", providerId }
+          : { status: "available", providerId, credential },
+      );
+    } else if (type !== undefined) {
+      resolutions.push({ status: "unsupported", providerId });
     }
-    if (type === undefined) continue;
-    firstProblem ??= { status: "unsupported", providerId };
   }
-  return firstProblem ?? { status: "missing" };
+  return resolutions.length > 0 ? resolutions : [{ status: "missing" }];
 }
 
 async function inspectCredential(

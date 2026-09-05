@@ -238,25 +238,25 @@ async function acquireZaiQuota(
   let attempts: SourceAttempt[] = [];
 
   try {
-    const piResolution = await resolvePiCredential(dependencies);
+    const piResolutions = await resolvePiCredentials(dependencies);
     const opencodeResolution = resolveOpencodeCredential(
       dependencies.credentialSource,
     );
     const selection = await selectCredential(
-      zaiCredentialCandidates(piResolution, opencodeResolution),
+      zaiCredentialCandidates(piResolutions, opencodeResolution),
       (candidate) =>
         attemptZaiCandidate(candidate, controller.signal, dependencies),
     );
     attempts = zaiAttempts(
       dependencies.piCredentialBroker.providerIds[0],
-      piResolution,
+      piResolutions,
       opencodeResolution,
       selection,
     );
     return zaiReportFromSelection(
       selection,
       attempts,
-      piResolution,
+      piResolutions,
       opencodeResolution,
       dependencies,
     );
@@ -288,13 +288,16 @@ async function acquireZaiQuota(
   }
 }
 
-async function resolvePiCredential(
+async function resolvePiCredentials(
   dependencies: ZaiDependencies,
-): Promise<PiApiKeyCredentialResolution> {
+): Promise<readonly PiApiKeyCredentialResolution[]> {
   try {
-    return await dependencies.piCredentialBroker.resolve();
+    if (dependencies.piCredentialBroker.resolveAll) {
+      return await dependencies.piCredentialBroker.resolveAll();
+    }
+    return [await dependencies.piCredentialBroker.resolve()];
   } catch {
-    return { status: "error" };
+    return [{ status: "error" }];
   }
 }
 
@@ -310,18 +313,19 @@ function resolveOpencodeCredential(
 
 /** Pi's entry is tried first; the opencode store stays the fallback. */
 function zaiCredentialCandidates(
-  piResolution: PiApiKeyCredentialResolution,
+  piResolutions: readonly PiApiKeyCredentialResolution[],
   opencodeResolution: ZaiCredentialResolution,
 ): readonly SelectionCandidate<ZaiAttemptCredential>[] {
   const candidates: SelectionCandidate<ZaiAttemptCredential>[] = [];
-  if (piResolution.status === "available") {
+  for (const resolution of piResolutions) {
+    if (resolution.status !== "available") continue;
     candidates.push({
-      source: `pi:${piResolution.providerId}`,
+      source: `pi:${resolution.providerId}`,
       localState: "valid",
       credential: {
-        apiKey: piResolution.credential,
+        apiKey: resolution.credential,
         host:
-          piResolution.providerId === PI_ZAI_CN_PROVIDER_ID
+          resolution.providerId === PI_ZAI_CN_PROVIDER_ID
             ? ZHIPU_HOST
             : ZAI_HOST,
       },
@@ -374,13 +378,15 @@ async function attemptZaiCandidate(
 
 function zaiAttempts(
   piPrimaryProviderId: string | undefined,
-  piResolution: PiApiKeyCredentialResolution,
+  piResolutions: readonly PiApiKeyCredentialResolution[],
   opencodeResolution: ZaiCredentialResolution,
   selection: CredentialSelection<NormalizedZaiPayload>,
 ): SourceAttempt[] {
-  const piSourceName = piEntrySourceName(piResolution, piPrimaryProviderId);
   return [
-    piAttemptRecord(piResolution, piSourceName, selection),
+    ...piResolutions.map((resolution) => {
+      const sourceName = piEntrySourceName(resolution, piPrimaryProviderId);
+      return piAttemptRecord(resolution, sourceName, selection);
+    }),
     opencodeAttemptRecord(opencodeResolution, selection),
   ];
 }
@@ -497,7 +503,7 @@ function selectionAttemptRecord(
 function zaiReportFromSelection(
   selection: CredentialSelection<NormalizedZaiPayload>,
   attempts: SourceAttempt[],
-  piResolution: PiApiKeyCredentialResolution,
+  piResolutions: readonly PiApiKeyCredentialResolution[],
   opencodeResolution: ZaiCredentialResolution,
   dependencies: ZaiDependencies,
 ): ProviderQuota {
@@ -523,7 +529,7 @@ function zaiReportFromSelection(
     };
   }
   return failureReport(
-    selectionFailureFor(selection, piResolution, opencodeResolution),
+    selectionFailureFor(selection, piResolutions, opencodeResolution),
     attempts,
     dependencies,
   );
@@ -531,9 +537,13 @@ function zaiReportFromSelection(
 
 function selectionFailureFor(
   selection: CredentialSelection<NormalizedZaiPayload>,
-  piResolution: PiApiKeyCredentialResolution,
+  piResolutions: readonly PiApiKeyCredentialResolution[],
   opencodeResolution: ZaiCredentialResolution,
 ): ZaiFailure {
+  const piResolution =
+    piResolutions.find((resolution) => resolution.status === "available") ??
+    piResolutions[0] ??
+    ({ status: "missing" } as const);
   switch (selection.outcome) {
     case "transient":
       return failureForCode(
@@ -545,7 +555,7 @@ function selectionFailureFor(
       // indeterminate: never a definitive sign-out (or cache retirement)
       // while a usable credential may sit behind an unreadable store.
       if (
-        piResolution.status === "error" ||
+        piResolutions.some((resolution) => resolution.status === "error") ||
         opencodeResolution.status === "error"
       ) {
         return new ZaiFailure("credential_resolution_failed", {
@@ -561,7 +571,7 @@ function selectionFailureFor(
       return new ZaiFailure("schema_invalid");
     default: {
       if (
-        piResolution.status === "error" ||
+        piResolutions.some((resolution) => resolution.status === "error") ||
         opencodeResolution.status === "error"
       ) {
         return new ZaiFailure("credential_resolution_failed", {

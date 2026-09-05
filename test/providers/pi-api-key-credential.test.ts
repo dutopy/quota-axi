@@ -38,6 +38,28 @@ describe("Pi API-key credential broker", () => {
     });
   });
 
+  it("preserves every usable entry for empirical selection", async () => {
+    piAuthFixture({
+      zai: { type: "api_key", key: "fixture-zai-key-812" },
+      "zai-coding-cn": { type: "api_key", key: "fixture-cn-key-463" },
+    });
+
+    await expect(
+      broker(["zai", "zai-coding-cn"]).resolveAll?.(),
+    ).resolves.toEqual([
+      {
+        status: "available",
+        providerId: "zai",
+        credential: "fixture-zai-key-812",
+      },
+      {
+        status: "available",
+        providerId: "zai-coding-cn",
+        credential: "fixture-cn-key-463",
+      },
+    ]);
+  });
+
   it("falls through absent entries to later provider ids in order", async () => {
     piAuthFixture({
       "zai-coding-cn": { type: "api_key", key: "fixture-cn-key-463" },
