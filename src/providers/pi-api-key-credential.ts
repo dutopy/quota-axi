@@ -64,7 +64,7 @@ type BrokerDependencies = {
  * (`{ "type": "api_key", "key": "..." }`), in place, for providers whose
  * quota endpoint authenticates with that key directly. The file is never
  * written, credential references (`!command`, `$ENV`) are never resolved,
- * and no credential material leaves `resolve()`'s return value.
+ * and credential material is exposed only in `resolve()` or `resolveAll()` return values.
  */
 export function createPiApiKeyCredentialBroker(
   providerIds: readonly string[],
