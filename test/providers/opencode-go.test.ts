@@ -732,6 +732,35 @@ describe("OpenCode Go Pi credential resolution", () => {
     ]);
   });
 
+  it("reports a later malformed fallback after authenticated empty Pi usage", async () => {
+    const request = vi
+      .fn()
+      .mockResolvedValueOnce(new Response(JSON.stringify({ usage: {} })))
+      .mockResolvedValueOnce(new Response("{unfinished"));
+    const report = await goAdapter({
+      credential: () => ({ status: "available", key: KEY, path: "/auth.json" }),
+      piCredentialBroker: piBrokerWith({
+        status: "available",
+        providerId: "opencode-go",
+        credential: PI_KEY,
+      }),
+      fetch: request,
+    }).fetchQuota(GO_OPTIONS);
+
+    expect(report.state).toMatchObject({
+      status: "error",
+      error: "malformed_json",
+    });
+    expect(report.attempts).toEqual([
+      { source: "pi:opencode-go", status: "success" },
+      {
+        source: "opencode:auth.json",
+        status: "failed",
+        error: "malformed_json",
+      },
+    ]);
+  });
+
   it("reports fresh empty usage when every credential is unmeasurable", async () => {
     const request = vi.fn(
       async () => new Response(JSON.stringify({ usage: {} })),

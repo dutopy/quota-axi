@@ -928,6 +928,34 @@ describe("Z.AI Pi credential resolution", () => {
     ]);
   });
 
+  it("reports a later schema failure after authenticated empty Pi quota", async () => {
+    const request = vi
+      .fn()
+      .mockResolvedValueOnce(jsonResponse({ data: { limits: [] } }))
+      .mockResolvedValueOnce(jsonResponse({ data: {} }));
+    const report = await testAdapter({
+      piCredentialBroker: piBroker({
+        status: "available",
+        providerId: "zai",
+        credential: PI_KEY,
+      }),
+      fetch: request,
+    }).fetchQuota(OPTIONS);
+
+    expect(report.state).toMatchObject({
+      status: "error",
+      error: "schema_invalid",
+    });
+    expect(report.attempts).toEqual([
+      { source: "pi:zai", status: "success" },
+      {
+        source: "opencode:auth.json",
+        status: "failed",
+        error: "schema_invalid",
+      },
+    ]);
+  });
+
   it("reports fresh empty quota when every credential is unmeasurable", async () => {
     const request = vi.fn(async () => jsonResponse({ data: { limits: [] } }));
     const report = await testAdapter({

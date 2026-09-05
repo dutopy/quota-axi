@@ -144,7 +144,8 @@ async function fetchQuota(dependencies: Dependencies): Promise<ProviderQuota> {
 
   if (
     (selection.outcome === "quota" && selection.result) ||
-    selection.outcome === "live_no_quota"
+    (selection.outcome === "live_no_quota" &&
+      selection.transientError === undefined)
   ) {
     const normalized = selection.result;
     return successProvider({
@@ -371,7 +372,7 @@ function selectionFailureFor(
       }
       return { status: "auth_required", code: "provider_auth_rejected" };
     case "live_no_quota":
-      return { status: "error", code: "quota_missing" };
+      return transientFailure(selection.transientError ?? "quota_missing");
     default: {
       if (
         piResolution.status === "error" ||

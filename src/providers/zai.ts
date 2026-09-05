@@ -508,7 +508,8 @@ function zaiReportFromSelection(
 ): ProviderQuota {
   if (
     (selection.outcome === "quota" && selection.result) ||
-    selection.outcome === "live_no_quota"
+    (selection.outcome === "live_no_quota" &&
+      selection.transientError === undefined)
   ) {
     const normalized = selection.result;
     const untrustedWindowIds =
@@ -570,7 +571,10 @@ function selectionFailureFor(
         definitiveAuth: true,
       });
     case "live_no_quota":
-      return new ZaiFailure("schema_invalid");
+      return failureForCode(
+        selection.transientError ?? "schema_invalid",
+        selection.retryAfter,
+      );
     default: {
       if (
         piResolutions.some((resolution) => resolution.status === "error") ||
