@@ -142,14 +142,17 @@ async function fetchQuota(dependencies: Dependencies): Promise<ProviderQuota> {
     dependencies,
   );
 
-  if (selection.outcome === "quota" && selection.result) {
+  if (
+    (selection.outcome === "quota" && selection.result) ||
+    selection.outcome === "live_no_quota"
+  ) {
     const normalized = selection.result;
     return successProvider({
       provider: "opencode-go",
       label: LABEL,
       source: "api",
-      ...(normalized.plan ? { plan: normalized.plan } : {}),
-      windows: normalized.windows,
+      ...(normalized?.plan ? { plan: normalized.plan } : {}),
+      windows: normalized?.windows ?? [],
       refreshedAt: new Date(dependencies.now()).toISOString(),
       sourcesTried: sourceNames(attempts),
       attempts,
@@ -227,7 +230,7 @@ async function attemptCandidate(
     );
     const normalized = normalizeOpenCodeGoPayload(payload);
     if (normalized.windows.length === 0) {
-      return { kind: "transient", error: "quota_missing" };
+      return { kind: "live_no_quota" };
     }
     return { kind: "quota", result: normalized };
   } catch (error) {
@@ -331,18 +334,14 @@ function selectionAttemptRecord(
   result: CandidateResult | undefined,
   selection: CredentialSelection<NormalizedOpenCodeGoPayload>,
 ): SourceAttempt {
-  if (
-    result === undefined ||
-    result.outcome === "not_tried" ||
-    result.outcome === "live_no_quota"
-  ) {
+  if (result === undefined || result.outcome === "not_tried") {
     return {
       source: sourceName,
       status: "skipped",
       ...(selection.transientError ? { error: selection.transientError } : {}),
     };
   }
-  if (result.outcome === "quota") {
+  if (result.outcome === "quota" || result.outcome === "live_no_quota") {
     return { source: sourceName, status: "success" };
   }
   return { source: sourceName, status: "failed", error: result.error };
@@ -372,7 +371,6 @@ function selectionFailureFor(
       }
       return { status: "auth_required", code: "provider_auth_rejected" };
     case "live_no_quota":
-      // Unreachable: every attempt yields windows or throws.
       return { status: "error", code: "quota_missing" };
     default: {
       if (

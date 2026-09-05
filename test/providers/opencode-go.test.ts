@@ -185,6 +185,35 @@ describe("OpenCode Go provider", () => {
     ]);
   });
 
+  it("reports authenticated responses without numeric quota as fresh and unmeasurable", async () => {
+    const report = await goAdapter({
+      credential: () => ({ status: "available", key: KEY, path: "/auth.json" }),
+      fetch: vi.fn(async () => new Response(JSON.stringify({ usage: {} }))),
+    }).fetchQuota(OPTIONS);
+
+    expect(report).toMatchObject({
+      source: "api",
+      windows: [],
+      state: { status: "fresh", stale: false },
+      attempts: [
+        { source: "pi:opencode-go", status: "skipped" },
+        { source: "opencode:auth.json", status: "success" },
+      ],
+    });
+  });
+
+  it("keeps malformed JSON distinct from authenticated empty usage", async () => {
+    const report = await goAdapter({
+      credential: () => ({ status: "available", key: KEY, path: "/auth.json" }),
+      fetch: vi.fn(async () => new Response("{unfinished")),
+    }).fetchQuota(OPTIONS);
+
+    expect(report.state).toMatchObject({
+      status: "error",
+      error: "malformed_json",
+    });
+  });
+
   it("cancels rejected response bodies before reporting the status", async () => {
     const cancel = vi.fn();
     const body = new ReadableStream<Uint8Array>({
@@ -675,6 +704,58 @@ describe("OpenCode Go Pi credential resolution", () => {
     ]);
     expect(JSON.stringify(report)).not.toContain(PI_KEY);
     expect(JSON.stringify(report)).not.toContain(KEY);
+  });
+
+  it("continues from unmeasurable Pi usage to measurable opencode usage", async () => {
+    const request = vi
+      .fn()
+      .mockResolvedValueOnce(new Response(JSON.stringify({ usage: {} })))
+      .mockResolvedValueOnce(USAGE_RESPONSE());
+    const report = await goAdapter({
+      credential: () => ({ status: "available", key: KEY, path: "/auth.json" }),
+      piCredentialBroker: piBrokerWith({
+        status: "available",
+        providerId: "opencode-go",
+        credential: PI_KEY,
+      }),
+      fetch: request,
+    }).fetchQuota(GO_OPTIONS);
+
+    expect(request).toHaveBeenCalledTimes(2);
+    expect(report.state.status).toBe("fresh");
+    expect(report.windows).toEqual([
+      expect.objectContaining({ id: "weekly", percentRemaining: 70 }),
+    ]);
+    expect(report.attempts).toEqual([
+      { source: "pi:opencode-go", status: "success" },
+      { source: "opencode:auth.json", status: "success" },
+    ]);
+  });
+
+  it("reports fresh empty usage when every credential is unmeasurable", async () => {
+    const request = vi.fn(
+      async () => new Response(JSON.stringify({ usage: {} })),
+    );
+    const report = await goAdapter({
+      credential: () => ({ status: "available", key: KEY, path: "/auth.json" }),
+      piCredentialBroker: piBrokerWith({
+        status: "available",
+        providerId: "opencode-go",
+        credential: PI_KEY,
+      }),
+      fetch: request,
+    }).fetchQuota(GO_OPTIONS);
+
+    expect(request).toHaveBeenCalledTimes(2);
+    expect(report).toMatchObject({
+      source: "api",
+      windows: [],
+      state: { status: "fresh", stale: false },
+      attempts: [
+        { source: "pi:opencode-go", status: "success" },
+        { source: "opencode:auth.json", status: "success" },
+      ],
+    });
   });
 
   it("falls back to the opencode credential when Pi's key is rejected", async () => {

@@ -357,7 +357,10 @@ async function attemptZaiCandidate(
       dependencies.fetch,
       dependencies.now,
     );
-    return { kind: "quota", result: normalizeZaiPayload(payload) };
+    const normalized = normalizeZaiPayload(payload);
+    return normalized.windows.length === 0
+      ? { kind: "live_no_quota" }
+      : { kind: "quota", result: normalized };
   } catch (error) {
     const failure =
       error instanceof ZaiFailure
@@ -483,18 +486,14 @@ function selectionAttemptRecord(
   result: CandidateResult | undefined,
   selection: CredentialSelection<NormalizedZaiPayload>,
 ): SourceAttempt {
-  if (
-    result === undefined ||
-    result.outcome === "not_tried" ||
-    result.outcome === "live_no_quota"
-  ) {
+  if (result === undefined || result.outcome === "not_tried") {
     return {
       source: sourceName,
       status: "skipped",
       ...(selection.transientError ? { error: selection.transientError } : {}),
     };
   }
-  if (result.outcome === "quota") {
+  if (result.outcome === "quota" || result.outcome === "live_no_quota") {
     return { source: sourceName, status: "success" };
   }
   return { source: sourceName, status: "failed", error: result.error };
@@ -507,17 +506,21 @@ function zaiReportFromSelection(
   opencodeResolution: ZaiCredentialResolution,
   dependencies: ZaiDependencies,
 ): ProviderQuota {
-  if (selection.outcome === "quota" && selection.result) {
+  if (
+    (selection.outcome === "quota" && selection.result) ||
+    selection.outcome === "live_no_quota"
+  ) {
     const normalized = selection.result;
-    const untrustedWindowIds = normalized.diagnostics.map(
-      (diagnostic) => `limit:${diagnostic.index}`,
-    );
+    const untrustedWindowIds =
+      normalized?.diagnostics.map(
+        (diagnostic) => `limit:${diagnostic.index}`,
+      ) ?? [];
     return {
       provider: "zai",
       label: "Z.AI",
       source: "api",
-      ...(normalized.plan ? { plan: normalized.plan } : {}),
-      windows: normalized.windows,
+      ...(normalized?.plan ? { plan: normalized.plan } : {}),
+      windows: normalized?.windows ?? [],
       state: {
         status: "fresh",
         stale: false,
@@ -567,7 +570,6 @@ function selectionFailureFor(
         definitiveAuth: true,
       });
     case "live_no_quota":
-      // Unreachable for Z.AI: every attempt yields windows or throws.
       return new ZaiFailure("schema_invalid");
     default: {
       if (
@@ -997,7 +999,7 @@ export function normalizeZaiPayload(payload: unknown): NormalizedZaiPayload {
     windows.push(window);
   }
 
-  if (windows.length === 0) {
+  if (windows.length === 0 && limitsValue.length > 0) {
     throw new ZaiFailure("schema_invalid");
   }
   const plan = stringValue(data?.level);

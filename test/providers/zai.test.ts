@@ -295,7 +295,6 @@ describe("Z.AI request transport", () => {
         "malformed_json",
       ],
       [jsonResponse({ code: 200, data: {} }), "schema_invalid"],
-      [jsonResponse({ data: { limits: [] } }), "schema_invalid"],
     ];
 
     for (const [response, code] of cases) {
@@ -304,6 +303,22 @@ describe("Z.AI request transport", () => {
       }).fetchQuota(OPTIONS);
       expect(report.state.error).toBe(code);
     }
+  });
+
+  it("reports a valid empty limits array as fresh and unmeasurable", async () => {
+    const report = await testAdapter({
+      fetch: vi.fn(async () => jsonResponse({ data: { limits: [] } })),
+    }).fetchQuota(OPTIONS);
+
+    expect(report).toMatchObject({
+      source: "api",
+      windows: [],
+      state: { status: "fresh", stale: false },
+      attempts: [
+        { source: "pi:zai", status: "skipped" },
+        { source: "opencode:auth.json", status: "success" },
+      ],
+    });
   });
 
   it("parses a JSON body regardless of the declared content type", async () => {
@@ -565,10 +580,16 @@ describe("Z.AI payload normalization", () => {
     ]);
   });
 
-  it("throws schema_invalid for a missing or non-array limits field", () => {
+  it("distinguishes an empty limits array from missing or malformed limits", () => {
+    expect(normalizeZaiPayload({ data: { limits: [] } })).toEqual({
+      windows: [],
+      diagnostics: [],
+    });
     expect(() => normalizeZaiPayload({ data: {} })).toThrow();
     expect(() => normalizeZaiPayload({ data: { limits: "no" } })).toThrow();
-    expect(() => normalizeZaiPayload({ data: { limits: [] } })).toThrow();
+    expect(() =>
+      normalizeZaiPayload({ data: { limits: ["malformed"] } }),
+    ).toThrow();
   });
 });
 
@@ -882,6 +903,60 @@ describe("Z.AI Pi credential resolution", () => {
       { source: "pi:zai-coding-cn", status: "success" },
       { source: "opencode:auth.json", status: "skipped" },
     ]);
+  });
+
+  it("continues from unmeasurable Pi quota to measurable opencode quota", async () => {
+    const request = vi
+      .fn()
+      .mockResolvedValueOnce(jsonResponse({ data: { limits: [] } }))
+      .mockResolvedValueOnce(jsonResponse(QUOTA_PAYLOAD));
+    const report = await testAdapter({
+      piCredentialBroker: piBroker({
+        status: "available",
+        providerId: "zai",
+        credential: PI_KEY,
+      }),
+      fetch: request,
+    }).fetchQuota(OPTIONS);
+
+    expect(request).toHaveBeenCalledTimes(2);
+    expect(report.state.status).toBe("fresh");
+    expect(report.windows.length).toBeGreaterThan(0);
+    expect(report.attempts).toEqual([
+      { source: "pi:zai", status: "success" },
+      { source: "opencode:auth.json", status: "success" },
+    ]);
+  });
+
+  it("reports fresh empty quota when every credential is unmeasurable", async () => {
+    const request = vi.fn(async () => jsonResponse({ data: { limits: [] } }));
+    const report = await testAdapter({
+      piCredentialBroker: piBroker([
+        {
+          status: "available",
+          providerId: "zai",
+          credential: PI_KEY,
+        },
+        {
+          status: "available",
+          providerId: "zai-coding-cn",
+          credential: "synthetic-pi-zai-cn-key-284",
+        },
+      ]),
+      fetch: request,
+    }).fetchQuota(OPTIONS);
+
+    expect(request).toHaveBeenCalledTimes(3);
+    expect(report).toMatchObject({
+      source: "api",
+      windows: [],
+      state: { status: "fresh", stale: false },
+      attempts: [
+        { source: "pi:zai", status: "success" },
+        { source: "pi:zai-coding-cn", status: "success" },
+        { source: "opencode:auth.json", status: "success" },
+      ],
+    });
   });
 
   it("falls back to the opencode credential when Pi's key is rejected", async () => {
