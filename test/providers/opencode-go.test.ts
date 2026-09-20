@@ -6,9 +6,13 @@ import { withQuotaSemantics } from "../../src/interpretation.js";
 import {
   createOpenCodeGoAdapter,
   createPiOpenCodeGoCredentialSource,
+  defaultOpenCodeGoCredentialSources,
   extractOpenCodeGoCredential,
   normalizeOpenCodeGoPayload,
   opencodeGoAuthFilePath,
+  OPENCODE_GO_CREDENTIAL_SOURCE,
+  PI_OPENCODE_GO_AUTH_ENV,
+  PI_OPENCODE_GO_SOURCE,
   type CredentialResolution,
   type NamedOpenCodeGoCredentialSource,
   type OpenCodeGoCredentialSource,
@@ -1043,4 +1047,71 @@ describe("OpenCode Go multi-source credentials", () => {
       rmSync(directory, { recursive: true, force: true });
     }
   }
+});
+
+describe("OpenCode Go Pi-auth opt-in", () => {
+  const names = (sources: NamedOpenCodeGoCredentialSource[]) =>
+    sources.map((source) => source.name);
+
+  it("keeps the opencode store as the only default source", () => {
+    expect(names(defaultOpenCodeGoCredentialSources({}))).toEqual([
+      OPENCODE_GO_CREDENTIAL_SOURCE,
+    ]);
+  });
+
+  it.each(["1", "true", "TRUE", " true "])(
+    "reads Pi first when the flag is %j",
+    (value) => {
+      expect(
+        names(
+          defaultOpenCodeGoCredentialSources({
+            [PI_OPENCODE_GO_AUTH_ENV]: value,
+          }),
+        ),
+      ).toEqual([PI_OPENCODE_GO_SOURCE, OPENCODE_GO_CREDENTIAL_SOURCE]);
+    },
+  );
+
+  it.each(["0", "yes", "", "false", undefined])(
+    "stays opencode-only when the flag is %j",
+    (value) => {
+      expect(
+        names(
+          defaultOpenCodeGoCredentialSources({
+            [PI_OPENCODE_GO_AUTH_ENV]: value,
+          }),
+        ),
+      ).toEqual([OPENCODE_GO_CREDENTIAL_SOURCE]);
+    },
+  );
+
+  it("reads the real Pi file-to-adapter path once opted in", () => {
+    const directory = mkdtempSync(
+      join(tmpdir(), "quota-axi-opencode-go-optin-"),
+    );
+    const originalDir = process.env.PI_CODING_AGENT_DIR;
+    try {
+      process.env.PI_CODING_AGENT_DIR = directory;
+      const path = join(directory, "auth.json");
+      writeFileSync(
+        path,
+        JSON.stringify({ "opencode-go": { type: "api_key", key: PI_KEY } }),
+      );
+
+      const piSource = defaultOpenCodeGoCredentialSources({
+        [PI_OPENCODE_GO_AUTH_ENV]: "1",
+      }).find((source) => source.name === PI_OPENCODE_GO_SOURCE);
+
+      expect(piSource?.source.resolve()).toEqual({
+        status: "available",
+        key: PI_KEY,
+        path,
+      });
+      expect(JSON.stringify(piSource?.source.inspect())).not.toContain(PI_KEY);
+    } finally {
+      if (originalDir === undefined) delete process.env.PI_CODING_AGENT_DIR;
+      else process.env.PI_CODING_AGENT_DIR = originalDir;
+      rmSync(directory, { recursive: true, force: true });
+    }
+  });
 });
