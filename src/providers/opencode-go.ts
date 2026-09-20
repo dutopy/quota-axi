@@ -159,7 +159,8 @@ export function createPiOpenCodeGoCredentialSource(
 
 /**
  * Pi's `opencode-go` entry is added first only when the opt-in environment
- * flag asks for it; the opencode store stays the default and fallback.
+ * flag asks for it; the opencode store stays the default and fallback. See
+ * README "Security Posture > Provider credential sources" for the rationale.
  */
 export function defaultOpenCodeGoCredentialSources(
   environment: Readonly<Record<string, string | undefined>> = process.env,
